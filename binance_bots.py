@@ -628,34 +628,34 @@ class BinanceFuturesBot:
     async def manage_open_positions(self):
         """Açık pozisyonları yönet"""
         try:
-            # futures_position_information yerine position_risk kullan
-            positions = self.client.position_risk()
-    
+            # Doğru metodu kullan
+            positions = self.client.get_position()  # veya self.client.get_position_risk()
+
             for position in positions:
                 position_amt = float(position['positionAmt'])
-    
+
                 if position_amt != 0:  # Açık pozisyon varsa
                     symbol = position['symbol']
                     side = 'LONG' if position_amt > 0 else 'SHORT'
                     entry_price = float(position['entryPrice'])
                     current_price = float(position['markPrice'])
                     unrealized_pnl = float(position['unRealizedProfit'])
-    
+
                     # Mum verilerini al
                     df = self.get_klines(symbol)
                     if df.empty:
                         continue
-                    
+
                     # İndikatörleri hesapla
                     df = self.calculate_indicators(df)
-    
+
                     # Trend analizi
                     trend = self.analyze_trend(df)
-    
+
                     # Pozisyon kapatma kriterleri
                     should_close = False
                     close_reason = ""
-    
+
                     # Trend değişimi kontrolü
                     if (side == 'LONG' and trend['direction'] == 'DOWN' and trend['strength'] >= 2):
                         should_close = True
@@ -663,7 +663,7 @@ class BinanceFuturesBot:
                     elif (side == 'SHORT' and trend['direction'] == 'UP' and trend['strength'] >= 2):
                         should_close = True
                         close_reason = "Trend Değişimi (Yükseliş)"
-    
+
                     if should_close:
                         try:
                             # Pozisyonu kapat
@@ -674,7 +674,7 @@ class BinanceFuturesBot:
                                 quantity=abs(position_amt),
                                 reduceOnly=True
                             )
-    
+
                             await self.send_telegram(
                                 f"🔴 Pozisyon Kapatıldı\n"
                                 f"Symbol: {symbol}\n"
@@ -684,15 +684,14 @@ class BinanceFuturesBot:
                                 f"Kar/Zarar: {unrealized_pnl:.2f} USDT\n"
                                 f"Sebep: {close_reason}"
                             )
-    
+
                         except Exception as close_error:
                             logging.error(f"Pozisyon kapatma hatası: {close_error}")
-    
+
                     await asyncio.sleep(self.rate_limit_delay)
-    
+
         except Exception as e:
             logging.error(f"Pozisyon yönetimi hatası: {e}")
-
 
 
     def _calculate_atr(self, symbol: str) -> float:
@@ -1482,7 +1481,7 @@ class BinanceFuturesBot:
         try:
             logging.info(f"Bot started by {self.config.get('created_by', 'unknown')}")
             await self.send_telegram("🚀 Trading Bot Activated")
-
+    
             while True:
                 try:
                     # Trading saatleri kontrolü
@@ -1490,10 +1489,10 @@ class BinanceFuturesBot:
                         # Sembolleri filtrele
                         filtered_symbols = self.filter_symbols()
                         logging.info(f"Filtered symbols: {filtered_symbols}")
-
+    
                         # Açık pozisyonları yönet
                         await self.manage_open_positions()
-
+    
                         # Her sembol için işlem analizi
                         for symbol in self.config['symbols']:
                             try:
@@ -1502,23 +1501,23 @@ class BinanceFuturesBot:
                                 if df.empty:
                                     logging.warning(f"No data received for {symbol}")
                                     continue
-
+                                
                                 # Temel göstergeleri hesapla
                                 df = self.calculate_indicators(df)
                                 logging.info(f"Basic indicators calculated for {symbol}")
-
+    
                                 # İleri seviye göstergeleri hesapla
                                 df = self.calculate_advanced_indicators(df)
                                 logging.info(f"Advanced indicators calculated for {symbol}")
-
+    
                                 # ML ve teknik sinyalleri üret
                                 ml_signal = self.generate_ml_signals(df)
                                 technical_signal = self.generate_signals(df)
-
+    
                                 # Trend analizi yap
                                 trend = self.analyze_trend(df)
                                 logging.info(f"Trend analysis for {symbol}: {trend['direction']} (Score: {trend['score']})")
-
+    
                                 # Sinyalleri doğrula
                                 if self._validate_signals(ml_signal, technical_signal):
                                     current_price = float(df['close'].iloc[-1])
@@ -1528,7 +1527,7 @@ class BinanceFuturesBot:
                                         f"Technical Signal: {technical_signal['type']} (Strength: {technical_signal['strength']:.2f})\n"
                                         f"Trend Direction: {trend['direction']} (Score: {trend['score']})"
                                     )
-
+    
                                     # Volatilite kontrolü
                                     if trend['volatility'] <= self.config['high_volatility_threshold']:
                                         # İşlem gerçekleştir
@@ -1539,10 +1538,10 @@ class BinanceFuturesBot:
                                         )
                                     else:
                                         logging.warning(f"High volatility detected for {symbol}: {trend['volatility']}")
-
+    
                                 # Açık pozisyonları kontrol et
                                 try:
-                                    positions = self.client.futures_position_information(symbol=symbol)  # Düzeltilmiş fonksiyon adı
+                                    positions = self.client.get_position(symbol=symbol)  # Güncellenmiş metod
                                     for position in positions:
                                         position_amt = float(position['positionAmt'])
                                         if position_amt != 0:
@@ -1557,17 +1556,17 @@ class BinanceFuturesBot:
                                                     )
                                                 except Exception as close_error:
                                                     logging.error(f"Position closing error for {symbol}: {close_error}")
-
+    
                                 except Exception as position_error:
                                     logging.error(f"Position checking error for {symbol}: {position_error}")
-
+    
                                 # Rate limit kontrolü
                                 await asyncio.sleep(self.rate_limit_delay)
-
+    
                             except Exception as symbol_error:
                                 logging.error(f"Error processing symbol {symbol}: {symbol_error}")
                                 continue
-
+                            
                         # Günlük istatistikleri kontrol et ve gerekirse sıfırla
                         if datetime.now().date() > self.last_daily_reset:
                             # Günlük özet gönder
@@ -1580,18 +1579,18 @@ class BinanceFuturesBot:
                                     f"Net PNL: {(self.daily_stats['profit'] - self.daily_stats['losses']):.2f} USDT"
                                 )
                                 await self.send_telegram(summary)
-
+    
                             self.reset_daily_stats()
-
+    
                     # Ana döngü bekleme süresi
                     await asyncio.sleep(self.config['check_interval'])
-
+    
                 except Exception as loop_error:
                     logging.error(f"Loop iteration error: {loop_error}")
                     if self.config['notifications']['error_alerts']:
                         await self.send_telegram(f"⚠️ Error in main loop: {loop_error}")
                     await asyncio.sleep(60)
-
+    
         except Exception as e:
             logging.error(f"Critical error in run method: {e}")
             await self.send_telegram("🚨 Bot stopped due to critical error!")
