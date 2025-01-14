@@ -449,251 +449,7 @@ class BinanceFuturesBot:
             logging.error(f"İleri seviye indikatör hesaplama hatası: {str(e)}")
             self.verify_indicators(df)
             return df
-        
-   
-
-
-     ### YENİ FONKSİYON - calculate_advanced_indicators fonksiyonundan sonra ekleyin ###
-    def analyze_trend(self, df: pd.DataFrame) -> dict:
-        """Geliştirilmiş trend analizi"""
-        try:
-            # Son kapanış fiyatları
-            last_candles = df['close'].tail(5)
-
-            # Temel göstergeler
-            rsi = df['RSI'].tail(5)
-            macd = df['MACD'].tail(5)
-            macd_signal = df['MACD_SIGNAL'].tail(5)
-            volume = df['volume'].tail(5)
-
-            # Ortalamalar
-            ema20 = df['EMA_20'].iloc[-1]
-            ema50 = df['EMA_50'].iloc[-1]
-            ema200 = df['EMA_200'].iloc[-1]
-
-            # Bollinger bantları
-            bb_upper = df['BB_UPPER'].iloc[-1]
-            bb_lower = df['BB_LOWER'].iloc[-1]
-            current_price = df['close'].iloc[-1]
-
-            # None değerlerini kontrol et
-            if any(v is None for v in [ema20, ema50, ema200, bb_upper, bb_lower, current_price]):
-                raise ValueError("NoneType value found in trend indicators")
-
-            # Trend skorlama
-            trend_score = 0
-
-            # Fiyat trendi analizi
-            price_trend = last_candles.diff().mean()
-            if price_trend > 0:
-                trend_score += 1
-            elif price_trend < 0:
-                trend_score -= 1
-
-            # EMA analizi
-            if current_price > ema20 > ema50:
-                trend_score += 2
-            elif current_price < ema20 < ema50:
-                trend_score -= 2
-
-            # RSI analizi
-            rsi_value = rsi.iloc[-1]
-            if rsi_value < 30:
-                trend_score += 1
-            elif rsi_value > 70:
-                trend_score -= 1
-
-            # MACD analizi
-            if macd.iloc[-1] > macd_signal.iloc[-1]:
-                trend_score += 1
-            else:
-                trend_score -= 1
-
-            # Bollinger Bant analizi
-            if current_price > bb_upper:
-                trend_score -= 1
-            elif current_price < bb_lower:
-                trend_score += 1
-
-            # Hacim analizi
-            volume_sma = df['volume'].rolling(20).mean().iloc[-1]
-            if volume.iloc[-1] > volume_sma * 1.5:
-                trend_score = trend_score * 1.5 if trend_score > 0 else trend_score * 0.5
-
-            # Volatilite hesaplama
-            atr = df['ATR'].iloc[-1]
-            avg_atr = df['ATR'].mean()
-            volatility = atr / avg_atr
-
-            return {
-                'score': trend_score,
-                'strength': abs(trend_score),
-                'direction': 'UP' if trend_score > 0 else 'DOWN' if trend_score < 0 else 'NEUTRAL',
-                'volatility': volatility,
-                'rsi': rsi_value,
-                'volume_ratio': volume.iloc[-1] / volume_sma,
-                'price_location': {
-                    'above_ema20': current_price > ema20,
-                    'above_ema50': current_price > ema50,
-                    'above_ema200': current_price > ema200,
-                    'in_bb': bb_lower < current_price < bb_upper
-                }
-            }
-
-        except Exception as e:
-            logging.error(f"Trend analizi hatası: {e}")
-            return {
-                'score': 0,
-                'strength': 0,
-                'direction': 'NEUTRAL',
-                'volatility': 1,
-                'rsi': 50,
-                'volume_ratio': 1,
-                'price_location': {
-                    'above_ema20': False,
-                    'above_ema50': False,
-                    'above_ema200': False,
-                    'in_bb': True
-                }
-            }
-         ### YENİ FONKSİYON - analyze_trend fonksiyonundan sonra ekleyin ###
-    def check_exit_conditions(self, df: pd.DataFrame, position_type: str) -> bool:
-        """İşlem çıkış koşullarını kontrol et"""
-        try:
-            # Son verileri al
-            last_row = df.iloc[-1]
-
-            # RSI kontrolü
-            rsi = last_row['RSI']
-
-            # MACD kontrolü
-            macd = last_row['MACD']
-            macd_signal = last_row['MACD_SIGNAL']
-
-            # Trend analizi
-            trend = self.analyze_trend(df)
-
-            # LONG pozisyon için çıkış koşulları
-            if position_type == 'LONG':
-                if (rsi > 70 or  # Aşırı alım
-                    (macd < macd_signal and macd > 0) or  # MACD kesişimi
-                    trend['direction'] == 'DOWN' and trend['strength'] >= 2):  # Güçlü düşüş trendi
-                    return True
-
-            # SHORT pozisyon için çıkış koşulları
-            elif position_type == 'SHORT':
-                if (rsi < 30 or  # Aşırı satım
-                    (macd > macd_signal and macd < 0) or  # MACD kesişimi
-                    trend['direction'] == 'UP' and trend['strength'] >= 2):  # Güçlü yükseliş trendi
-                    return True
-
-            return False
-
-        except Exception as e:
-            logging.error(f"Çıkış koşulları kontrolü hatası: {e}")
-            return False   
-
-### YENİ FONKSİYON - check_exit_conditions fonksiyonundan sonra ekleyin ###
-    async def close_position(self, symbol: str, position_amt: float, side: str):
-        """Pozisyonu kapat"""
-        try:
-            close_side = 'SELL' if side == 'LONG' else 'BUY'
-
-            order = self.client.futures_create_order(
-                symbol=symbol,
-                side=close_side,
-                type='MARKET',
-                quantity=abs(position_amt),
-                reduceOnly=True
-            )
-
-            await self.send_telegram(
-                f"🔴 Pozisyon Kapatıldı\n"
-                f"Symbol: {symbol}\n"
-                f"Side: {side}\n"
-                f"Quantity: {abs(position_amt)}\n"
-                f"Type: Market\n"
-                f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-
-            return True
-
-        except Exception as e:
-            logging.error(f"Pozisyon kapatma hatası: {e}")
-            await self.send_telegram(f"⚠️ Pozisyon kapatma hatası: {symbol} - {str(e)}")
-            return False
-        
-
-
-    async def manage_open_positions(self):
-        """Açık pozisyonları yönet"""
-        try:
-            # Doğru metodu kullan
-            positions = self.client.get_position()  # veya self.client.get_position_risk()
-
-            for position in positions:
-                position_amt = float(position['positionAmt'])
-
-                if position_amt != 0:  # Açık pozisyon varsa
-                    symbol = position['symbol']
-                    side = 'LONG' if position_amt > 0 else 'SHORT'
-                    entry_price = float(position['entryPrice'])
-                    current_price = float(position['markPrice'])
-                    unrealized_pnl = float(position['unRealizedProfit'])
-
-                    # Mum verilerini al
-                    df = self.get_klines(symbol)
-                    if df.empty:
-                        continue
-
-                    # İndikatörleri hesapla
-                    df = self.calculate_indicators(df)
-
-                    # Trend analizi
-                    trend = self.analyze_trend(df)
-
-                    # Pozisyon kapatma kriterleri
-                    should_close = False
-                    close_reason = ""
-
-                    # Trend değişimi kontrolü
-                    if (side == 'LONG' and trend['direction'] == 'DOWN' and trend['strength'] >= 2):
-                        should_close = True
-                        close_reason = "Trend Değişimi (Düşüş)"
-                    elif (side == 'SHORT' and trend['direction'] == 'UP' and trend['strength'] >= 2):
-                        should_close = True
-                        close_reason = "Trend Değişimi (Yükseliş)"
-
-                    if should_close:
-                        try:
-                            # Pozisyonu kapat
-                            close_order = self.client.new_order(
-                                symbol=symbol,
-                                side='SELL' if side == 'LONG' else 'BUY',
-                                type='MARKET',
-                                quantity=abs(position_amt),
-                                reduceOnly=True
-                            )
-
-                            await self.send_telegram(
-                                f"🔴 Pozisyon Kapatıldı\n"
-                                f"Symbol: {symbol}\n"
-                                f"Yön: {side}\n"
-                                f"Giriş: {entry_price}\n"
-                                f"Çıkış: {current_price}\n"
-                                f"Kar/Zarar: {unrealized_pnl:.2f} USDT\n"
-                                f"Sebep: {close_reason}"
-                            )
-
-                        except Exception as close_error:
-                            logging.error(f"Pozisyon kapatma hatası: {close_error}")
-
-                    await asyncio.sleep(self.rate_limit_delay)
-
-        except Exception as e:
-            logging.error(f"Pozisyon yönetimi hatası: {e}")
-
-
+            
     def _calculate_atr(self, symbol: str) -> float:
         """ATR hesapla"""
         try:
@@ -1270,51 +1026,7 @@ class BinanceFuturesBot:
         except Exception as e:
             logging.error(f"Sembol bilgisi alma hatası: {e}")
             return None
-        
 
-    def filter_symbols(self) -> List[str]:
-        """İşlem yapılacak coinleri filtrele"""
-        try:
-            filtered_symbols = []
-            
-            # Tüm sembollerin 24 saatlik verilerini al
-            tickers = self.client.ticker_price()  # ticker_24hr yerine ticker_price kullan
-            
-            for ticker in tickers:
-                symbol = ticker['symbol']
-                if not symbol.endswith('USDT'):
-                    continue
-                
-                try:
-                    # Her sembol için detaylı bilgi al
-                    symbol_info = self.client.mark_price(symbol=symbol)
-                    price = float(symbol_info['markPrice'])
-                    
-                    # 24 saatlik işlem hacmini al
-                    klines = self.client.klines(
-                        symbol=symbol,
-                        interval='1d',
-                        limit=1
-                    )
-                    volume = float(klines[0][5]) * price  # volume * price
-                    
-                    # Filtreleme kriterleri
-                    if (volume > 5000000 and  # Minimum 5M USDT günlük hacim
-                        price > 1.0 and       # 1 USDT'den yüksek fiyat
-                        symbol not in ['YFIUSDT', 'MKRUSDT', 'BCHUSDT']):  # İstenmeyen coinleri hariç tut
-                        
-                        filtered_symbols.append(symbol)
-                        
-                except Exception as symbol_error:
-                    logging.warning(f"Symbol veri alma hatası {symbol}: {symbol_error}")
-                    continue
-                
-            # En iyi 10 sembolü seç
-            return filtered_symbols[:10] if filtered_symbols else self.config['symbols'][:10]
-            
-        except Exception as e:
-            logging.error(f"Symbol filtreleme hatası: {e}")
-            return self.config['symbols'][:10]  # Hata durumunda varsayılan sembolleri kullan
     def round_to_precision(self, value: float, precision: int) -> float:
         """Değeri belirtilen hassasiyete yuvarla"""
         factor = 10 ** precision
@@ -1486,111 +1198,52 @@ class BinanceFuturesBot:
                 try:
                     # Trading saatleri kontrolü
                     if self.is_trading_allowed():
-                        # Sembolleri filtrele
-                        filtered_symbols = self.filter_symbols()
-                        logging.info(f"Filtered symbols: {filtered_symbols}")
-    
-                        # Açık pozisyonları yönet
-                        await self.manage_open_positions()
-    
-                        # Her sembol için işlem analizi
                         for symbol in self.config['symbols']:
-                            try:
-                                # Mum verilerini al
-                                df = self.get_klines(symbol)
-                                if df.empty:
-                                    logging.warning(f"No data received for {symbol}")
-                                    continue
-                                
-                                # Temel göstergeleri hesapla
-                                df = self.calculate_indicators(df)
-                                logging.info(f"Basic indicators calculated for {symbol}")
-    
-                                # İleri seviye göstergeleri hesapla
-                                df = self.calculate_advanced_indicators(df)
-                                logging.info(f"Advanced indicators calculated for {symbol}")
-    
-                                # ML ve teknik sinyalleri üret
-                                ml_signal = self.generate_ml_signals(df)
-                                technical_signal = self.generate_signals(df)
-    
-                                # Trend analizi yap
-                                trend = self.analyze_trend(df)
-                                logging.info(f"Trend analysis for {symbol}: {trend['direction']} (Score: {trend['score']})")
-    
-                                # Sinyalleri doğrula
-                                if self._validate_signals(ml_signal, technical_signal):
-                                    current_price = float(df['close'].iloc[-1])
-                                    logging.info(
-                                        f"Signal validated for {symbol}:\n"
-                                        f"ML Signal: {ml_signal['type']} (Probability: {ml_signal['probability']:.2f})\n"
-                                        f"Technical Signal: {technical_signal['type']} (Strength: {technical_signal['strength']:.2f})\n"
-                                        f"Trend Direction: {trend['direction']} (Score: {trend['score']})"
-                                    )
-    
-                                    # Volatilite kontrolü
-                                    if trend['volatility'] <= self.config['high_volatility_threshold']:
-                                        # İşlem gerçekleştir
-                                        await self.execute_trade_with_risk_management(
-                                            symbol=symbol,
-                                            signal_type=ml_signal['type'],
-                                            current_price=current_price
-                                        )
-                                    else:
-                                        logging.warning(f"High volatility detected for {symbol}: {trend['volatility']}")
-    
-                                # Açık pozisyonları kontrol et
-                                try:
-                                    positions = self.client.get_position(symbol=symbol)  # Güncellenmiş metod
-                                    for position in positions:
-                                        position_amt = float(position['positionAmt'])
-                                        if position_amt != 0:
-                                            # Pozisyon çıkış koşullarını kontrol et
-                                            position_side = 'LONG' if position_amt > 0 else 'SHORT'
-                                            if self.check_exit_conditions(df, position_side):
-                                                try:
-                                                    await self.close_position(
-                                                        symbol=symbol,
-                                                        position_amt=position_amt,
-                                                        side=position_side
-                                                    )
-                                                except Exception as close_error:
-                                                    logging.error(f"Position closing error for {symbol}: {close_error}")
-    
-                                except Exception as position_error:
-                                    logging.error(f"Position checking error for {symbol}: {position_error}")
-    
-                                # Rate limit kontrolü
-                                await asyncio.sleep(self.rate_limit_delay)
-    
-                            except Exception as symbol_error:
-                                logging.error(f"Error processing symbol {symbol}: {symbol_error}")
+                            # Mum verilerini al
+                            df = self.get_klines(symbol)
+                            if df.empty:
+                                logging.warning(f"No data received for {symbol}")
                                 continue
+
+                                # Temel göstergeleri hesapla
+                            df = self.calculate_indicators(df)
+                            logging.info(f"Basic indicators calculated for {symbol}")
+
+                            # İleri seviye göstergeleri hesapla
+                            df = self.calculate_advanced_indicators(df)
+                            logging.info(f"Advanced indicators calculated for {symbol}")
+
+                            # ML ve teknik sinyalleri üret
+                            ml_signal = self.generate_ml_signals(df)
+                            technical_signal = self.generate_signals(df)
+
+                            # Sinyalleri doğrula
+                            if self._validate_signals(ml_signal, technical_signal):
+                                current_price = float(df['close'].iloc[-1])
+                                logging.info(f"Sinyal onaylandı: {ml_signal['type']} (Güç: {technical_signal['strength']}, ML Olasılık: {ml_signal['probability']})")
                             
-                        # Günlük istatistikleri kontrol et ve gerekirse sıfırla
-                        if datetime.now().date() > self.last_daily_reset:
-                            # Günlük özet gönder
-                            if self.config['notifications']['daily_summary']:
-                                summary = (
-                                    f"📊 Günlük Özet\n"
-                                    f"İşlem Sayısı: {self.daily_stats['trades']}\n"
-                                    f"Toplam Kar: {self.daily_stats['profit']:.2f} USDT\n"
-                                    f"Toplam Zarar: {self.daily_stats['losses']:.2f} USDT\n"
-                                    f"Net PNL: {(self.daily_stats['profit'] - self.daily_stats['losses']):.2f} USDT"
+                                # Burada signal_type olarak sadece string gönderiyoruz
+                                await self.execute_trade_with_risk_management(
+                                    symbol=symbol,
+                                    signal_type=ml_signal['type'],  # Sadece 'BUY' veya 'SELL' string'i
+                                    current_price=current_price
                                 )
-                                await self.send_telegram(summary)
-    
-                            self.reset_daily_stats()
-    
+
+                            # Rate limit kontrolü
+                            await asyncio.sleep(self.rate_limit_delay)
+
+                    # Günlük istatistikleri sıfırla
+                    if datetime.now().date() > self.last_daily_reset:
+                        self.reset_daily_stats()
+
                     # Ana döngü bekleme süresi
                     await asyncio.sleep(self.config['check_interval'])
-    
+
                 except Exception as loop_error:
                     logging.error(f"Loop iteration error: {loop_error}")
-                    if self.config['notifications']['error_alerts']:
-                        await self.send_telegram(f"⚠️ Error in main loop: {loop_error}")
+                    await self.send_telegram(f"⚠️ Error in main loop: {loop_error}")
                     await asyncio.sleep(60)
-    
+
         except Exception as e:
             logging.error(f"Critical error in run method: {e}")
             await self.send_telegram("🚨 Bot stopped due to critical error!")
