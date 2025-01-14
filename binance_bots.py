@@ -476,6 +476,10 @@ class BinanceFuturesBot:
             bb_lower = df['BB_LOWER'].iloc[-1]
             current_price = df['close'].iloc[-1]
 
+            # None değerlerini kontrol et
+            if any(v is None for v in [ema20, ema50, ema200, bb_upper, bb_lower, current_price]):
+                raise ValueError("NoneType value found in trend indicators")
+
             # Trend skorlama
             trend_score = 0
 
@@ -551,7 +555,7 @@ class BinanceFuturesBot:
                     'above_ema200': False,
                     'in_bb': True
                 }
-            }       
+            }
          ### YENİ FONKSİYON - analyze_trend fonksiyonundan sonra ekleyin ###
     def check_exit_conditions(self, df: pd.DataFrame, position_type: str) -> bool:
         """İşlem çıkış koşullarını kontrol et"""
@@ -624,34 +628,34 @@ class BinanceFuturesBot:
     async def manage_open_positions(self):
         """Açık pozisyonları yönet"""
         try:
-            # futures_position_information yerine position_information kullan
-            positions = self.client.position_information()
-
+            # futures_position_information yerine position_risk kullan
+            positions = self.client.position_risk()
+    
             for position in positions:
                 position_amt = float(position['positionAmt'])
-
+    
                 if position_amt != 0:  # Açık pozisyon varsa
                     symbol = position['symbol']
                     side = 'LONG' if position_amt > 0 else 'SHORT'
                     entry_price = float(position['entryPrice'])
                     current_price = float(position['markPrice'])
                     unrealized_pnl = float(position['unRealizedProfit'])
-
+    
                     # Mum verilerini al
                     df = self.get_klines(symbol)
                     if df.empty:
                         continue
-
+                    
                     # İndikatörleri hesapla
                     df = self.calculate_indicators(df)
-
+    
                     # Trend analizi
                     trend = self.analyze_trend(df)
-
+    
                     # Pozisyon kapatma kriterleri
                     should_close = False
                     close_reason = ""
-
+    
                     # Trend değişimi kontrolü
                     if (side == 'LONG' and trend['direction'] == 'DOWN' and trend['strength'] >= 2):
                         should_close = True
@@ -659,7 +663,7 @@ class BinanceFuturesBot:
                     elif (side == 'SHORT' and trend['direction'] == 'UP' and trend['strength'] >= 2):
                         should_close = True
                         close_reason = "Trend Değişimi (Yükseliş)"
-
+    
                     if should_close:
                         try:
                             # Pozisyonu kapat
@@ -670,7 +674,7 @@ class BinanceFuturesBot:
                                 quantity=abs(position_amt),
                                 reduceOnly=True
                             )
-
+    
                             await self.send_telegram(
                                 f"🔴 Pozisyon Kapatıldı\n"
                                 f"Symbol: {symbol}\n"
@@ -680,14 +684,17 @@ class BinanceFuturesBot:
                                 f"Kar/Zarar: {unrealized_pnl:.2f} USDT\n"
                                 f"Sebep: {close_reason}"
                             )
-
+    
                         except Exception as close_error:
                             logging.error(f"Pozisyon kapatma hatası: {close_error}")
-
+    
                     await asyncio.sleep(self.rate_limit_delay)
-
+    
         except Exception as e:
             logging.error(f"Pozisyon yönetimi hatası: {e}")
+
+
+
     def _calculate_atr(self, symbol: str) -> float:
         """ATR hesapla"""
         try:
@@ -1535,7 +1542,7 @@ class BinanceFuturesBot:
 
                                 # Açık pozisyonları kontrol et
                                 try:
-                                    positions = self.client.position_information(symbol=symbol)  # Değiştirildi
+                                    positions = self.client.futures_position_information(symbol=symbol)  # Düzeltilmiş fonksiyon adı
                                     for position in positions:
                                         position_amt = float(position['positionAmt'])
                                         if position_amt != 0:
