@@ -460,12 +460,106 @@ class BinanceFuturesBot:
             logging.error(f"ATR hesaplama hatası: {e}")
             return 0.0
 
-    def _calculate_dynamic_stop_loss(self, price: float, atr: float, trade_type: str, multiplier: float) -> float:
-        """Dinamik stop loss hesapla"""
-        if trade_type == 'BUY':
-            return price - (atr * multiplier)
-        elif trade_type == 'SELL':
-            return price + (atr * multiplier)
+    def _calculate_dynamic_stop_loss(self, price: float, atr: float, trade_type: str, symbol: str) -> tuple:
+        """
+        İyileştirilmiş dinamik stop loss ve take profit hesaplama
+        - ATR bazlı dinamik hesaplama
+        - Volatiliteye göre ayarlanan çarpanlar  
+        - Trend yönüne göre optimizasyon
+        """
+        try:
+            # Volatilite bazlı çarpan hesaplama
+            volatility = self._calculate_volatility(symbol)
+            base_multiplier = self.config['risk_management'].get('base_atr_multiplier', 2.0)
+
+            # Volatiliteye göre çarpanı ayarla
+            if volatility > 0.05:  # Yüksek volatilite
+                sl_multiplier = base_multiplier * 1.5
+                tp_multiplier = base_multiplier * 2
+            else:  # Normal volatilite
+                sl_multiplier = base_multiplier
+                tp_multiplier = base_multiplier * 1.5
+
+            # Trend analizi
+            trend = self._analyze_trend(symbol)
+
+            if trade_type == 'BUY':
+                # Trend yönüne göre stop loss ve take profit ayarla
+                if trend == 'BULLISH':
+                    sl_price = price - (atr * sl_multiplier * 0.8)  # Daha yakın SL
+                    tp_price = price + (atr * tp_multiplier * 1.2)  # Daha uzak TP
+                elif trend == 'BEARISH':
+                    sl_price = price - (atr * sl_multiplier * 1.2)  # Daha uzak SL
+                    tp_price = price + (atr * tp_multiplier * 0.8)  # Daha yakın TP
+                else:  # SIDEWAYS
+                    sl_price = price - (atr * sl_multiplier)
+                    tp_price = price + (atr * tp_multiplier)
+
+            elif trade_type == 'SELL':
+                if trend == 'BEARISH':
+                    sl_price = price + (atr * sl_multiplier * 0.8)
+                    tp_price = price - (atr * tp_multiplier * 1.2)
+                elif trend == 'BULLISH':
+                    sl_price = price + (atr * sl_multiplier * 1.2)
+                    tp_price = price - (atr * tp_multiplier * 0.8)
+                else:
+                    sl_price = price + (atr * sl_multiplier)
+                    tp_price = price - (atr * tp_multiplier)
+
+            # Risk/Ödül oranı kontrolü
+            rr_ratio = abs(tp_price - price) / abs(sl_price - price)
+            min_rr_ratio = self.config['risk_management'].get('min_risk_reward_ratio', 1.5)
+
+            if rr_ratio < min_rr_ratio:
+                logging.warning(f"Risk/Ödül oranı çok düşük: {rr_ratio:.2f}")
+                return None, None
+
+            return sl_price, tp_price
+
+        except Exception as e:
+            logging.error(f"Stop loss/Take profit hesaplama hatası: {e}")
+            return None, None
+
+
+    def _calculate_volatility(self, symbol: str) -> float:
+        """
+        Sembol için volatilite hesapla
+        20 günlük standart sapma kullanılıyor
+        """
+        try:
+            df = self.get_klines(symbol)
+            if not df.empty:
+                returns = df['close'].pct_change()
+                volatility = returns.std() * (252 ** 0.5)  # Yıllık volatilite
+                return volatility
+            return 0
+        except Exception as e:
+            logging.error(f"Volatilite hesaplama hatası: {e}")
+            return 0
+    
+    def _analyze_trend(self, symbol: str) -> str:
+        """
+        Trend analizi yap
+        EMA50 ve EMA200 kullanılıyor
+        """
+        try:
+            df = self.get_klines(symbol)
+            if not df.empty:
+                df['EMA50'] = ta.ema(df['close'], length=50)
+                df['EMA200'] = ta.ema(df['close'], length=200)
+                
+                last_row = df.iloc[-1]
+                
+                if last_row['EMA50'] > last_row['EMA200'] * 1.02:
+                    return 'BULLISH'
+                elif last_row['EMA50'] < last_row['EMA200'] * 0.98:
+                    return 'BEARISH'
+                else:
+                    return 'SIDEWAYS'
+            return 'SIDEWAYS'
+        except Exception as e:
+            logging.error(f"Trend analizi hatası: {e}")
+            return 'SIDEWAYS'
 
     def _calculate_dynamic_take_profit(self, price: float, atr: float, trade_type: str, multiplier: float) -> float:
         """Dinamik take profit hesapla"""
@@ -983,31 +1077,129 @@ class BinanceFuturesBot:
         return True
 
     def calculate_position_size(self, symbol: str, current_price: float) -> float:
-        """Pozisyon büyüklüğünü hesapla"""
+        """
+        Geliştirişmiş pozisyon büyüklüğü hesaplama:
+        - Risk yüzdesi ayarlanabilir hale getirildi
+        - Maksimum pozisyon büyüklüğü sınırı eklendi
+        - Kelly Criterion uygulandı
+        - Dinamik risk ayarı eklendi
+        """
         try:
-            # Bakiyeyi al
+            # Hesap bakiyesini al
             balance = float(self.get_account_balance())
             logging.info(f"Mevcut bakiye: {balance} USDT")
-        
-            # Minimum işlem miktarı (örnek: 0.001 BTC için yaklaşık 0.05 USDT)
-            min_trade_value = 0.05
-        
-            # Risk miktarını hesapla (bakiyenin %95'i)
-            risk_amount = balance * 0.95
-        
+
+            # Risk parametreleri
+            base_risk_percentage = 0.02  # Temel risk yüzdesi %2
+            max_risk_percentage = 0.05   # Maksimum risk yüzdesi %5
+            min_trade_value = 5.1        # Minimum işlem değeri USDT
+            max_position_value = 1000    # Maksimum pozisyon değeri USDT
+
+            # Son 20 işlemin performansını kontrol et
+            win_rate = self.calculate_win_rate(20)
+            avg_win_loss_ratio = self.calculate_avg_win_loss_ratio(20)
+
+            # Kelly Criterion hesaplama
+            if win_rate > 0 and avg_win_loss_ratio > 0:
+                kelly_percentage = win_rate - ((1 - win_rate) / avg_win_loss_ratio)
+                kelly_percentage = max(0, min(kelly_percentage, max_risk_percentage))
+            else:
+                kelly_percentage = base_risk_percentage
+
+            # Volatilite bazlı risk ayarı
+            volatility_multiplier = self.calculate_volatility_multiplier(symbol)
+            adjusted_risk = kelly_percentage * volatility_multiplier
+
+            # Final risk yüzdesini belirle
+            final_risk_percentage = min(adjusted_risk, max_risk_percentage)
+            risk_amount = balance * final_risk_percentage
+
             # Pozisyon büyüklüğünü hesapla
             position_size = risk_amount / current_price
-        
-            # Minimum işlem değeri kontrolü
-            if position_size * current_price < min_trade_value:
-                logging.warning(f"İşlem değeri çok düşük: {position_size * current_price} USDT")
+
+            # Pozisyon sınırlamalarını uygula
+            position_value = position_size * current_price
+            if position_value > max_position_value:
+                position_size = max_position_value / current_price
+
+            if position_value < min_trade_value:
+                logging.warning(f"İşlem değeri çok düşük: {position_value} USDT")
                 return 0
-            
+
+            # Sembol hassasiyetine göre yuvarla
+            symbol_info = self.get_symbol_info(symbol)
+            if symbol_info:
+                position_size = self.round_to_precision(
+                    position_size, 
+                    symbol_info['quantityPrecision']
+                )
+
+            logging.info(
+                f"Pozisyon hesaplama: Risk%={final_risk_percentage*100:.2f}, "
+                f"Size={position_size}, Value={position_size*current_price:.2f} USDT"
+            )
+
             return position_size
-        
+
         except Exception as e:
             logging.error(f"Pozisyon büyüklüğü hesaplama hatası: {e}")
             return 0
+        
+
+    def calculate_win_rate(self, lookback: int = 20) -> float:
+        """Son n işlemin kazanma oranını hesapla"""
+        try:
+            trades = self.get_recent_trades(lookback)
+            if not trades:
+                return 0.5  # Yeterli veri yoksa varsayılan oran
+
+            winning_trades = sum(1 for trade in trades if trade['realizedPnl'] > 0)
+            return winning_trades / len(trades)
+        except Exception as e:
+            logging.error(f"Win rate hesaplama hatası: {e}")
+            return 0.5
+
+    def calculate_avg_win_loss_ratio(self, lookback: int = 20) -> float:
+        """Son n işlemin ortalama kazanç/kayıp oranını hesapla"""
+        try:
+            trades = self.get_recent_trades(lookback)
+            if not trades:
+                return 1.0  # Yeterli veri yoksa varsayılan oran
+
+            wins = [float(t['realizedPnl']) for t in trades if float(t['realizedPnl']) > 0]
+            losses = [abs(float(t['realizedPnl'])) for t in trades if float(t['realizedPnl']) < 0]
+
+            avg_win = sum(wins) / len(wins) if wins else 0
+            avg_loss = sum(losses) / len(losses) if losses else 1
+
+            return avg_win / avg_loss if avg_loss else 1.0
+        except Exception as e:
+            logging.error(f"Win/Loss ratio hesaplama hatası: {e}")
+            return 1.0
+
+    def calculate_volatility_multiplier(self, symbol: str) -> float:
+        """Volatilite bazlı risk çarpanı hesapla"""
+        try:
+            df = self.get_klines(symbol)
+            if df.empty:
+                return 1.0
+
+            # Son 20 mumdaki volatiliteyi hesapla
+            returns = df['close'].pct_change().tail(20)
+            volatility = returns.std()
+
+            # Volatilite bazlı çarpan (0.5 ile 1.0 arasında)
+            base_volatility = 0.02  # Baz volatilite
+            multiplier = 1.0 - min(max(volatility / base_volatility - 1, 0), 0.5)
+
+            return multiplier
+        except Exception as e:
+            logging.error(f"Volatilite çarpanı hesaplama hatası: {e}")
+            return 1.0
+
+
+
+
         
     def get_symbol_info(self, symbol: str) -> dict:
         """Sembol bilgilerini al"""
