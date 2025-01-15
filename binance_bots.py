@@ -536,7 +536,7 @@ class BinanceFuturesBot:
         except Exception as e:
             logging.error(f"Volatilite hesaplama hatası: {e}")
             return 0
-    
+
     def _analyze_trend(self, symbol: str) -> str:
         """
         Trend analizi yap
@@ -547,9 +547,9 @@ class BinanceFuturesBot:
             if not df.empty:
                 df['EMA50'] = ta.ema(df['close'], length=50)
                 df['EMA200'] = ta.ema(df['close'], length=200)
-                
+
                 last_row = df.iloc[-1]
-                
+
                 if last_row['EMA50'] > last_row['EMA200'] * 1.02:
                     return 'BULLISH'
                 elif last_row['EMA50'] < last_row['EMA200'] * 0.98:
@@ -989,9 +989,9 @@ class BinanceFuturesBot:
               ml_probability = float(ml_signal.get('probability', 0))
               
               # Minimum eşik değerleri
-              min_strength = 1.20       # Düşürüldü: 0.60 -> 0.05
-              min_confidence = 1.01     # Düşürüldü: 0.40 -> 0.02
-              min_ml_prob = 0.62       # Düşürüldü: 0.55 -> 0.51
+              min_strength = 0.68       # Düşürüldü: 0.60 -> 0.05
+              min_confidence = 0.5     # Düşürüldü: 0.40 -> 0.02
+              min_ml_prob = 0.60       # Düşürüldü: 0.55 -> 0.51
               
               # Formasyon desteği kontrolü
               pattern_signals = technical_signal.get('pattern_signals', {})
@@ -1090,8 +1090,8 @@ class BinanceFuturesBot:
             logging.info(f"Mevcut bakiye: {balance} USDT")
 
             # Risk parametreleri
-            base_risk_percentage = 0.02  # Temel risk yüzdesi %2
-            max_risk_percentage = 0.05   # Maksimum risk yüzdesi %5
+            base_risk_percentage = 0.05  # Temel risk yüzdesi %2
+            max_risk_percentage = 0.10   # Maksimum risk yüzdesi %5
             min_trade_value = 5.1        # Minimum işlem değeri USDT
             max_position_value = 1000    # Maksimum pozisyon değeri USDT
 
@@ -1243,7 +1243,7 @@ class BinanceFuturesBot:
             try:
                 self.client.change_leverage(
                     symbol=symbol,
-                    leverage=10
+                    leverage=12
                 )
                 logging.info(f"Kaldıraç ayarlandı: {symbol} 10x")
             except Exception as e:
