@@ -244,8 +244,13 @@ class BinanceFuturesBot:
             df['DI_plus'] = adx['DMP_14']
             df['DI_minus'] = adx['DMN_14']
 
-            # Ichimoku Cloud - Düzeltilmiş versiyon
-          
+            # ATR (Average True Range)
+            df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+            # momentum (Average True Range)
+            df = self.calculate_momentum_indicators(df)
+            # Parabolic SAR
+            psar = ta.psar(df['high'], df['low'], df['close'])
+            df['SAR'] = psar['PSARl_0.02_0.2']  # Use appropriate key for PSAR
 
             # ---- MUM FORMASYONLARI ----
             df['DOJI'] = self.calculate_doji(df)
@@ -257,19 +262,6 @@ class BinanceFuturesBot:
             df['THREE_WHITE_SOLDIERS'] = self.calculate_three_white_soldiers(df)
             df['THREE_BLACK_CROWS'] = self.calculate_three_black_crows(df)
 
-            # ---- MOMENTUM İNDİKATÖRLERİ ----
-            df['ROC'] = ta.roc(df['close'], length=9)
-            df['WILLIAMS_R'] = ta.willr(df['high'], df['low'], df['close'], length=14)
-            df['CCI'] = ta.cci(df['high'], df['low'], df['close'], length=20)
-
-            # ---- VOLATILITE İNDİKATÖRLERİ ----
-            df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
-
-            # ---- HACİM İNDİKATÖRLERİ ----
-            if 'volume' in df.columns:
-                df['OBV'] = ta.obv(df['close'], df['volume'])
-                df['VWAP'] = self.calculate_vwap(df)
-
             # NaN değerleri temizle
             df = df.ffill().bfill()
 
@@ -277,7 +269,7 @@ class BinanceFuturesBot:
             required_indicators = [
                 'RSI', 'MACD', 'MACD_SIGNAL', 'BB_UPPER', 'BB_LOWER',
                 'SMA_20', 'EMA_20', 'EMA_50', 'EMA_200', 'StochRSI_K', 'StochRSI_D',
-                'ADX'
+                'ADX', 'ATR', 'SAR'
             ]
 
             missing_indicators = [ind for ind in required_indicators if ind not in df.columns]
@@ -292,7 +284,6 @@ class BinanceFuturesBot:
         except Exception as e:
             logging.error(f"İndikatör hesaplama hatası: {str(e)}", exc_info=True)
             return df
-
     def calculate_doji(self, df: pd.DataFrame) -> pd.Series:
         """Doji mum formasyonunu hesapla"""
         try:
@@ -302,7 +293,55 @@ class BinanceFuturesBot:
         except Exception as e:
             logging.error(f"Doji hesaplama hatası: {str(e)}")
             return pd.Series(0, index=df.index)
-
+    def calculate_momentum_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Momentum göstergelerini hesapla"""
+        try:
+            logging.info("Momentum göstergeleri hesaplanıyor...")
+    
+            # MFI (Money Flow Index)
+            df['MFI'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
+            
+            # CMF (Chaikin Money Flow)
+            df['CMF'] = ta.cmf(df['high'], df['low'], df['close'], df['volume'], length=20)
+            
+            # ADL (Accumulation/Distribution Line)
+            df['ADL'] = ta.ad(df['high'], df['low'], df['close'], df['volume'])
+            
+            # OBV (On Balance Volume) ve trend
+            df['OBV'] = ta.obv(df['close'], df['volume'])
+            df['OBV_EMA'] = ta.ema(df['OBV'], length=20)
+    
+            # TSI (True Strength Index) - Düzeltilmiş versiyon
+            tsi = ta.tsi(df['close'], length=25, signal=13)
+            if isinstance(tsi, pd.DataFrame):
+                df['TSI'] = tsi['TSI_25_13']
+            else:
+                df['TSI'] = tsi
+    
+            # Momentum (MOM)
+            df['MOM'] = ta.mom(df['close'], length=14)
+    
+            # ROC (Rate of Change)
+            df['ROC'] = ta.roc(df['close'], length=9)
+    
+            logging.info("Momentum göstergeleri başarıyla hesaplandı")
+            return df
+    
+        except Exception as e:
+            logging.error(f"Momentum göstergeleri hesaplama hatası: {e}")
+            # Hata durumunda en azından bazı göstergeleri hesaplamaya çalış
+            try:
+                if 'MFI' not in df.columns:
+                    df['MFI'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
+                if 'ROC' not in df.columns:
+                    df['ROC'] = ta.roc(df['close'], length=9)
+                if 'OBV' not in df.columns:
+                    df['OBV'] = ta.obv(df['close'], df['volume'])
+                if 'TSI' not in df.columns:
+                    df['TSI'] = 0  # Varsayılan değer
+            except:
+                pass
+            return df
     def calculate_hammer(self, df: pd.DataFrame) -> pd.Series:
         """Çekiç formasyonunu hesapla"""
         try:
@@ -314,7 +353,139 @@ class BinanceFuturesBot:
         except Exception as e:
             logging.error(f"Hammer hesaplama hatası: {str(e)}")
             return pd.Series(0, index=df.index)
+        
 
+    def analyze_trend_strength(self, df: pd.DataFrame) -> dict:
+        """Trend gücünü analiz et"""
+        try:
+            logging.info("Trend gücü analizi yapılıyor...")
+
+            last_row = df.iloc[-1]
+            last_rows = df.tail(2)
+
+            trend_strength = {
+                'trend': 'NEUTRAL',
+                'strength': 0,
+                'confidence': 0,
+                'momentum_confirmation': False,
+                'volume_confirmation': False
+            }
+
+            # EMA Trend Analizi
+            ema_trend = (last_row['EMA_20'] > last_row['EMA_50']) and (last_row['EMA_50'] > last_row['EMA_200'])
+            ema_trend_reverse = (last_row['EMA_20'] < last_row['EMA_50']) and (last_row['EMA_50'] < last_row['EMA_200'])
+
+            # ADX Trend Gücü
+            adx_strength = last_row['ADX'] > 25
+
+            # Momentum Göstergeleri Kontrolü
+            momentum_signals = [
+                last_row['RSI'] > 50,  # RSI trend
+                last_row['MACD'] > last_row['MACD_SIGNAL'],  # MACD trend
+                last_row['MFI'] > 50,  # MFI trend
+                last_row['ROC'] > 0,  # ROC trend
+                last_row['TSI'] > 0,  # TSI trend
+                last_row['OBV'] > last_row['OBV_EMA']  # OBV trend
+            ]
+
+            # Volume Trend
+            volume_trend = (
+                last_row['volume'] > df['volume'].rolling(window=20).mean().iloc[-1] and
+                last_row['CMF'] > 0
+            )
+
+            # Toplam bullish sinyalleri hesapla
+            bullish_signals = sum([
+                ema_trend,
+                adx_strength,
+                *momentum_signals,
+                volume_trend
+            ])
+
+            total_signals = 8  # Toplam sinyal sayısı
+
+            # Trend yönü ve gücünü belirle
+            if ema_trend and bullish_signals >= 6:
+                trend_strength['trend'] = 'STRONG_BULLISH'
+                trend_strength['strength'] = 0.9
+            elif ema_trend and bullish_signals >= 5:
+                trend_strength['trend'] = 'BULLISH'
+                trend_strength['strength'] = 0.7
+            elif ema_trend_reverse and bullish_signals <= 2:
+                trend_strength['trend'] = 'STRONG_BEARISH'
+                trend_strength['strength'] = 0.9
+            elif ema_trend_reverse and bullish_signals <= 3:
+                trend_strength['trend'] = 'BEARISH'
+                trend_strength['strength'] = 0.7
+            else:
+                trend_strength['trend'] = 'NEUTRAL'
+                trend_strength['strength'] = 0.5
+
+            # Güven seviyesi hesaplama
+            trend_strength['confidence'] = bullish_signals / total_signals
+            trend_strength['momentum_confirmation'] = sum(momentum_signals) / len(momentum_signals) > 0.6
+            trend_strength['volume_confirmation'] = volume_trend
+
+            logging.info(f"Trend analizi sonucu: {trend_strength}")
+            return trend_strength
+
+        except Exception as e:
+            logging.error(f"Trend gücü analizi hatası: {e}")
+            return {
+                'trend': 'NEUTRAL',
+                'strength': 0,
+                'confidence': 0,
+                'momentum_confirmation': False,
+                'volume_confirmation': False
+            }
+
+    def check_volatility_conditions(self, df: pd.DataFrame) -> dict:
+        """Volatilite koşullarını kontrol et"""
+        try:
+            logging.info("Volatilite analizi yapılıyor...")
+
+            result = {
+                'is_valid': False,
+                'atr_ratio': 0,
+                'bb_width_ratio': 0,
+                'volatility_state': 'HIGH'
+            }
+
+            # ATR bazlı volatilite kontrolü
+            current_atr = df['ATR'].iloc[-1]
+            avg_atr = df['ATR'].rolling(window=20).mean().iloc[-1]
+            atr_ratio = current_atr / avg_atr
+
+            # Bollinger Bands genişliği
+            bb_width = (df['BB_UPPER'] - df['BB_LOWER']) / df['BB_MIDDLE']
+            current_bb_width = bb_width.iloc[-1]
+            avg_bb_width = bb_width.rolling(window=20).mean().iloc[-1]
+            bb_width_ratio = current_bb_width / avg_bb_width
+
+            # Sonuçları kaydet
+            result['atr_ratio'] = atr_ratio
+            result['bb_width_ratio'] = bb_width_ratio
+
+            # Volatilite durumunu belirle
+            if 0.8 <= atr_ratio <= 1.5 and 0.7 <= bb_width_ratio <= 1.3:
+                result['is_valid'] = True
+                result['volatility_state'] = 'NORMAL'
+            elif atr_ratio < 0.8 and bb_width_ratio < 0.7:
+                result['volatility_state'] = 'LOW'
+            else:
+                result['volatility_state'] = 'HIGH'
+
+            logging.info(f"Volatilite analizi sonucu: {result}")
+            return result
+
+        except Exception as e:
+            logging.error(f"Volatilite kontrolü hatası: {e}")
+            return {
+                'is_valid': False,
+                'atr_ratio': 0,
+                'bb_width_ratio': 0,
+                'volatility_state': 'ERROR'
+            }
     def calculate_bullish_engulfing(self, df: pd.DataFrame) -> pd.Series:
         """Yutan boğa formasyonunu hesapla"""
         try:
@@ -783,11 +954,12 @@ class BinanceFuturesBot:
 
         
     def generate_signals(self, df: pd.DataFrame) -> dict:
-        """Teknik analiz sinyalleri üret"""
+        """Geliştirilmiş teknik analiz sinyalleri üretimi"""
         try:
             required_columns = [
                 'RSI', 'MACD', 'MACD_SIGNAL', 'BB_UPPER', 'BB_LOWER',
-                'StochRSI_K', 'StochRSI_D', 'StochRSI', 'ADX', 'DI_plus', 'DI_minus', 'ATR', 'SAR'
+                'StochRSI_K', 'StochRSI_D', 'StochRSI', 'ADX', 'DI_plus', 'DI_minus', 
+                'ATR', 'SAR', 'MFI', 'CMF', 'OBV', 'OBV_EMA', 'ROC'
             ]
     
             # Gerekli sütunların kontrolü
@@ -796,13 +968,17 @@ class BinanceFuturesBot:
                 logging.warning(f"Missing columns for signal generation: {missing_columns}")
                 return {'type': 'NONE', 'reason': 'missing_data'}
     
+            # Pattern sinyallerini başlangıçta hesapla
+            hammer_pattern = self.hammer_pattern(df)
+            doji_pattern = self.doji_pattern(df)
+    
             last_row = df.iloc[-1]
             signal_strength = 0
             total_weight = 0
             buy_score = 0
             sell_score = 0
     
-            # Ağırlıklar ve skorlar
+            # Genişletilmiş ağırlıklar ve skorlar
             weights = {
                 'TECHNICAL': {
                     'RSI': 10,
@@ -811,7 +987,11 @@ class BinanceFuturesBot:
                     'STOCH': 10,
                     'ADX': 10,
                     'ATR': 10,
-                    'SAR': 10
+                    'SAR': 10,
+                    'MFI': 8,
+                    'CMF': 8,
+                    'OBV': 8,
+                    'ROC': 8
                 },
                 'PATTERN': {
                     'HAMMER': 10,
@@ -821,10 +1001,14 @@ class BinanceFuturesBot:
                     'EVENING_STAR': 8,
                     'THREE_WHITE_SOLDIERS': 8,
                     'THREE_BLACK_CROWS': 8
+                },
+                'TREND': {
+                    'EMA_TREND': 12,
+                    'VOLUME_TREND': 10,
+                    'MOMENTUM': 10
                 }
             }
     
-            # 1. Teknik İndikatör Sinyalleri
             # RSI Analizi
             if 'RSI' in df.columns:
                 weight = weights['TECHNICAL']['RSI']
@@ -870,24 +1054,24 @@ class BinanceFuturesBot:
                 weight = weights['TECHNICAL']['ADX']
                 total_weight += weight
                 adx = last_row['ADX']
-                di_plus = last_row['DI_plus']
-                di_minus = last_row['DI_minus']
-                if adx > 25 and di_plus > di_minus:
+                if adx > 25 and last_row['DI_plus'] > last_row['DI_minus']:
                     buy_score += weight * ((adx - 25) / 25)
-                elif adx > 25 and di_minus > di_plus:
+                elif adx > 25 and last_row['DI_minus'] > last_row['DI_plus']:
                     sell_score += weight * ((adx - 25) / 25)
     
-            # ATR Analizi (Volatilite)
+            # ATR Analizi
+            atr_ratio = 1.0
             if 'ATR' in df.columns:
                 weight = weights['TECHNICAL']['ATR']
                 total_weight += weight
                 atr = last_row['ATR']
+                atr_ratio = atr / df['ATR'].mean()
                 if atr < df['ATR'].mean():
                     buy_score += weight * (df['ATR'].mean() / atr)
                 elif atr > df['ATR'].mean():
                     sell_score += weight * (atr / df['ATR'].mean())
     
-            # Parabolic SAR Analizi
+            # SAR Analizi
             if 'SAR' in df.columns:
                 weight = weights['TECHNICAL']['SAR']
                 total_weight += weight
@@ -896,26 +1080,59 @@ class BinanceFuturesBot:
                 elif last_row['SAR'] > last_row['close']:
                     sell_score += weight
     
-            # 2. Formasyon Sinyalleri
-            # Çekiç (Hammer)
-            hammer = self.hammer_pattern(df)
-            if hammer == "BUY":
+            # MFI Analizi
+            if 'MFI' in df.columns:
+                weight = weights['TECHNICAL']['MFI']
+                total_weight += weight
+                if last_row['MFI'] < 20:
+                    buy_score += weight * ((20 - last_row['MFI']) / 20)
+                elif last_row['MFI'] > 80:
+                    sell_score += weight * ((last_row['MFI'] - 80) / 20)
+    
+            # CMF Analizi
+            if 'CMF' in df.columns:
+                weight = weights['TECHNICAL']['CMF']
+                total_weight += weight
+                if last_row['CMF'] > 0:
+                    buy_score += weight * min(abs(last_row['CMF']), 1.0)
+                else:
+                    sell_score += weight * min(abs(last_row['CMF']), 1.0)
+    
+            # OBV Trend Analizi
+            if all(col in df.columns for col in ['OBV', 'OBV_EMA']):
+                weight = weights['TECHNICAL']['OBV']
+                total_weight += weight
+                if last_row['OBV'] > last_row['OBV_EMA']:
+                    buy_score += weight
+                else:
+                    sell_score += weight
+    
+            # ROC Analizi
+            if 'ROC' in df.columns:
+                weight = weights['TECHNICAL']['ROC']
+                total_weight += weight
+                if last_row['ROC'] > 0:
+                    buy_score += weight * min(last_row['ROC'] / 2, 1.0)
+                else:
+                    sell_score += weight * min(abs(last_row['ROC']) / 2, 1.0)
+    
+            # Formasyon Analizleri
+            # Hammer Pattern
+            if hammer_pattern == "BUY":
                 weight = weights['PATTERN']['HAMMER']
                 total_weight += weight
                 buy_score += weight
     
-            # Doji
-            doji = self.doji_pattern(df)
-            if doji == "CAUTION":
+            # Doji Pattern
+            if doji_pattern == "CAUTION":
                 weight = weights['PATTERN']['DOJI']
                 total_weight += weight
-                # Doji trendin tersine sinyal verir
                 if buy_score > sell_score:
                     sell_score += weight
                 else:
                     buy_score += weight
     
-            # Yutan Formasyonlar
+            # Engulfing Patterns
             if df['BULLISH_ENGULFING'].iloc[-1]:
                 weight = weights['PATTERN']['ENGULFING']
                 total_weight += weight
@@ -925,7 +1142,7 @@ class BinanceFuturesBot:
                 total_weight += weight
                 sell_score += weight
     
-            # Morning Star ve Evening Star
+            # Star Patterns
             if df['MORNING_STAR'].iloc[-1]:
                 weight = weights['PATTERN']['MORNING_STAR']
                 total_weight += weight
@@ -935,7 +1152,7 @@ class BinanceFuturesBot:
                 total_weight += weight
                 sell_score += weight
     
-            # Three White Soldiers ve Three Black Crows
+            # Soldier/Crow Patterns
             if df['THREE_WHITE_SOLDIERS'].iloc[-1]:
                 weight = weights['PATTERN']['THREE_WHITE_SOLDIERS']
                 total_weight += weight
@@ -945,24 +1162,55 @@ class BinanceFuturesBot:
                 total_weight += weight
                 sell_score += weight
     
+            # Trend Analysis
+            if 'EMA_20' in df.columns and 'EMA_50' in df.columns:
+                weight = weights['TREND']['EMA_TREND']
+                total_weight += weight
+                if last_row['EMA_20'] > last_row['EMA_50']:
+                    buy_score += weight
+                else:
+                    sell_score += weight
+    
+            # Volume Trend Analysis
+            if 'volume' in df.columns:
+                weight = weights['TREND']['VOLUME_TREND']
+                total_weight += weight
+                avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
+                if last_row['volume'] > avg_volume * 1.5:
+                    if last_row['close'] > last_row['open']:
+                        buy_score += weight
+                    else:
+                        sell_score += weight
+    
             # Sonuçları hesapla
             if total_weight > 0:
                 buy_strength = buy_score / total_weight
                 sell_strength = sell_score / total_weight
-                
+    
+                # Volatilite bazlı ayarlama
+                volatility_multiplier = 1.0
+                if atr_ratio > 1.5:
+                    volatility_multiplier = 0.8
+                elif atr_ratio < 0.5:
+                    volatility_multiplier = 1.2
+    
+                buy_strength *= volatility_multiplier
+                sell_strength *= volatility_multiplier
+    
                 # Sinyal türünü ve gücünü belirle
-                if buy_strength > sell_strength:
+                if buy_strength > sell_strength and buy_strength > 0.6:
                     signal_type = 'BUY'
                     signal_strength = buy_strength
-                elif sell_strength > buy_strength:
+                elif sell_strength > buy_strength and sell_strength > 0.6:
                     signal_type = 'SELL'
                     signal_strength = sell_strength
                 else:
                     signal_type = 'HOLD'
                     signal_strength = 0
     
-                # Güven seviyesi hesaplama
+                # Güven seviyesi ve trend gücü hesaplama
                 confidence = abs(buy_strength - sell_strength)
+                trend_strength = min(last_row['ADX'] / 50.0, 1.0) if 'ADX' in df.columns else 0
     
                 return {
                     'type': signal_type,
@@ -973,9 +1221,11 @@ class BinanceFuturesBot:
                     'total_weight': total_weight,
                     'buy_strength': float(buy_strength),
                     'sell_strength': float(sell_strength),
+                    'trend_strength': float(trend_strength),
+                    'volatility_state': 'HIGH' if atr_ratio > 1.5 else 'LOW' if atr_ratio < 0.5 else 'NORMAL',
                     'pattern_signals': {
-                        'hammer': hammer,
-                        'doji': doji,
+                        'hammer': hammer_pattern,
+                        'doji': doji_pattern,
                         'bullish_engulfing': bool(df['BULLISH_ENGULFING'].iloc[-1]),
                         'bearish_engulfing': bool(df['BEARISH_ENGULFING'].iloc[-1]),
                         'morning_star': bool(df['MORNING_STAR'].iloc[-1]),
@@ -994,6 +1244,8 @@ class BinanceFuturesBot:
                 'total_weight': 0,
                 'buy_strength': 0.0,
                 'sell_strength': 0.0,
+                'trend_strength': 0.0,
+                'volatility_state': 'NORMAL',
                 'pattern_signals': {
                     'hammer': 'HOLD',
                     'doji': 'HOLD',
