@@ -989,9 +989,9 @@ class BinanceFuturesBot:
               ml_probability = float(ml_signal.get('probability', 0))
               
               # Minimum eşik değerleri
-              min_strength = 0.68       # Düşürüldü: 0.60 -> 0.05
-              min_confidence = 0.5     # Düşürüldü: 0.40 -> 0.02
-              min_ml_prob = 0.60       # Düşürüldü: 0.55 -> 0.51
+              min_strength = 1.01       # Düşürüldü: 0.60 -> 0.05
+              min_confidence = 0.50     # Düşürüldü: 0.40 -> 0.02
+              min_ml_prob = 0.50       # Düşürüldü: 0.55 -> 0.51
               
               # Formasyon desteği kontrolü
               pattern_signals = technical_signal.get('pattern_signals', {})
@@ -1090,8 +1090,8 @@ class BinanceFuturesBot:
             logging.info(f"Mevcut bakiye: {balance} USDT")
 
             # Risk parametreleri
-            base_risk_percentage = 0.05  # Temel risk yüzdesi %2
-            max_risk_percentage = 0.10   # Maksimum risk yüzdesi %5
+            base_risk_percentage = 0.02  # Temel risk yüzdesi %2
+            max_risk_percentage = 0.5   # Maksimum risk yüzdesi %5
             min_trade_value = 5.1        # Minimum işlem değeri USDT
             max_position_value = 1000    # Maksimum pozisyon değeri USDT
 
@@ -1229,6 +1229,26 @@ class BinanceFuturesBot:
         try:
             trade_side = signal_type
 
+            # Mevcut pozisyonu kontrol et
+            current_position = self.positions.get(symbol)
+            if current_position:
+                # Eğer mevcut pozisyon varsa ve sinyal ters yöndeyse pozisyonu kapat
+                if (current_position['side'] == 'BUY' and signal_type == 'SELL') or (current_position['side'] == 'SELL' and signal_type == 'BUY'):
+                    try:
+                        close_order = self.client.new_order(
+                            symbol=symbol,
+                            side='SELL' if current_position['side'] == 'BUY' else 'BUY',
+                            type='MARKET',
+                            quantity=current_position['quantity']
+                        )
+                        logging.info(f"Mevcut pozisyon kapatıldı: {symbol} {current_position['side']} {current_position['quantity']}")
+                        await self.send_telegram(f"⚠️ Mevcut pozisyon kapatıldı: {symbol} {current_position['side']} {current_position['quantity']}")
+                        self.positions.pop(symbol)
+                    except Exception as close_order_error:
+                        logging.error(f"Mevcut pozisyon kapatma hatası: {close_order_error}")
+                        await self.send_telegram(f"⚠️ Mevcut pozisyon kapatma hatası: {symbol} - {str(close_order_error)}")
+                        return False
+
             # Hesap bakiyesini al
             balance = float(self.get_account_balance())
             logging.info(f"Mevcut bakiye: {balance} USDT")
@@ -1312,6 +1332,13 @@ class BinanceFuturesBot:
                     closePosition='true'
                 )
 
+                # Pozisyonu kaydet
+                self.positions[symbol] = {
+                    'side': trade_side,
+                    'quantity': quantity,
+                    'entry_price': price
+                }
+
                 message = (
                     f"✅ İşlem Gerçekleşti\n"
                     f"Sembol: {symbol}\n"
@@ -1321,7 +1348,7 @@ class BinanceFuturesBot:
                     f"İşlem Değeri: {final_notional:.2f} USDT\n"
                     f"Stop Loss: {sl_price}\n"
                     f"Take Profit: {tp_price}\n"
-                    f"Kaldıraç: 5x\n"
+                    f"Kaldıraç: 12x\n"
                     f"Bakiye: {balance} USDT"
                 )
 
@@ -1339,7 +1366,7 @@ class BinanceFuturesBot:
             logging.error(f"İşlem yönetimi hatası: {e}")
             await self.send_telegram(f"⚠️ İşlem Yönetimi Hatası: {symbol} - {str(e)}")
             return False
-    
+
     def get_account_balance(self):
         """Hesap bakiyesini al (Vadeli işlemler hesabı)"""
         try:
