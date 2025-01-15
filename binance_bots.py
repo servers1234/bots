@@ -298,52 +298,110 @@ class BinanceFuturesBot:
         try:
             logging.info("Momentum göstergeleri hesaplanıyor...")
     
-            # MFI (Money Flow Index)
-            mfi = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
-            df['MFI'] = mfi.astype(float)
-            
-            # CMF (Chaikin Money Flow)
-            cmf = ta.cmf(df['high'], df['low'], df['close'], df['volume'], length=20)
-            df['CMF'] = cmf.astype(float)
-            
-            # ADL (Accumulation/Distribution Line)
-            adl = ta.ad(df['high'], df['low'], df['close'], df['volume'])
-            df['ADL'] = adl.astype(float)
-            
-            # OBV (On Balance Volume) ve trend
-            obv = ta.obv(df['close'], df['volume'])
-            df['OBV'] = obv.astype(float)
-            obv_ema = ta.ema(df['OBV'], length=20)
-            df['OBV_EMA'] = obv_ema.astype(float)
+            # Manuel MFI hesaplama
+            def calculate_mfi(df: pd.DataFrame, length: int = 14) -> pd.Series:
+                try:
+                    # Önce tüm değerleri float64'e çevir
+                    high = df['high'].astype('float64')
+                    low = df['low'].astype('float64')
+                    close = df['close'].astype('float64')
+                    volume = df['volume'].astype('float64')
     
-            # TSI (True Strength Index) - Manuel hesaplama
-            close_diff = df['close'].diff().astype(float)
-            abs_close_diff = abs(close_diff).astype(float)
-            
-            double_smoothed = ta.ema(ta.ema(close_diff, length=25), length=13).astype(float)
-            double_smoothed_abs = ta.ema(ta.ema(abs_close_diff, length=25), length=13).astype(float)
-            
-            df['TSI'] = 100 * (double_smoothed / double_smoothed_abs).astype(float)
+                    # Typical price hesapla
+                    typical_price = (high + low + close) / 3.0
+                    
+                    # Money flow hesapla
+                    raw_money_flow = typical_price * volume
+                    
+                    # Money flow'u pandas Series'e çevir
+                    money_flow = pd.Series(raw_money_flow, index=df.index, dtype='float64')
+                    
+                    # Fiyat değişimi hesapla
+                    price_diff = typical_price.diff()
     
-            # Momentum (MOM)
-            mom = ta.mom(df['close'], length=14)
-            df['MOM'] = mom.astype(float)
+                    # Pozitif ve negatif flow'ları başlangıçta sıfır olarak ayarla
+                    positive_flow = pd.Series(0.0, index=df.index, dtype='float64')
+                    negative_flow = pd.Series(0.0, index=df.index, dtype='float64')
     
-            # ROC (Rate of Change)
-            roc = ta.roc(df['close'], length=9)
-            df['ROC'] = roc.astype(float)
+                    # İndeks bazlı atama yerine loc kullan
+                    positive_flow.loc[price_diff > 0] = money_flow[price_diff > 0]
+                    negative_flow.loc[price_diff < 0] = money_flow[price_diff < 0]
+    
+                    # Hareketli ortalamalar
+                    positive_mf = positive_flow.rolling(window=length, min_periods=1).sum()
+                    negative_mf = negative_flow.rolling(window=length, min_periods=1).sum()
+    
+                    # Sıfıra bölünmeyi önle
+                    mfi = np.where(
+                        negative_mf != 0,
+                        100 - (100 / (1 + (positive_mf / negative_mf))),
+                        100
+                    )
+    
+                    return pd.Series(mfi, index=df.index).fillna(50)
+    
+                except Exception as e:
+                    logging.error(f"Manuel MFI hesaplama hatası: {e}")
+                    return pd.Series(50, index=df.index, dtype='float64')
+    
+            # Veri tiplerini başlangıçta düzelt
+            for col in ['high', 'low', 'close', 'volume']:
+                df[col] = pd.to_numeric(df[col], errors='coerce').astype('float64')
+    
+            # MFI hesapla
+            df['MFI'] = calculate_mfi(df)
+    
+            # Diğer göstergeler...
+            indicators = {
+                'CMF': lambda: ta.cmf(df['high'], df['low'], df['close'], df['volume'], length=20),
+                'ADL': lambda: ta.ad(df['high'], df['low'], df['close'], df['volume']),
+                'OBV': lambda: ta.obv(df['close'], df['volume']),
+                'MOM': lambda: ta.mom(df['close'], length=14),
+                'ROC': lambda: ta.roc(df['close'], length=9)
+            }
+    
+            for indicator_name, calc_func in indicators.items():
+                try:
+                    df[indicator_name] = calc_func().astype('float64')
+                except Exception as e:
+                    logging.error(f"{indicator_name} hesaplama hatası: {e}")
+                    df[indicator_name] = 0.0
+    
+            # OBV EMA hesapla
+            try:
+                df['OBV_EMA'] = ta.ema(df['OBV'], length=20).astype('float64')
+            except Exception as e:
+                logging.error(f"OBV_EMA hesaplama hatası: {e}")
+                df['OBV_EMA'] = 0.0
+    
+            # TSI hesapla
+            try:
+                close_diff = df['close'].diff().astype('float64')
+                double_smoothed = ta.ema(ta.ema(close_diff, length=25), length=13)
+                double_smoothed_abs = ta.ema(ta.ema(close_diff.abs(), length=25), length=13)
+                
+                df['TSI'] = np.where(
+                    double_smoothed_abs != 0,
+                    100 * (double_smoothed / double_smoothed_abs),
+                    0
+                ).astype('float64')
+            except Exception as e:
+                logging.error(f"TSI hesaplama hatası: {e}")
+                df['TSI'] = 0.0
+    
+            # NaN değerleri temizle
+            for col in df.columns:
+                if df[col].dtype.kind in 'fc':  # float veya complex tipler için
+                    df[col] = df[col].ffill().bfill().fillna(0).astype('float64')
     
             logging.info("Momentum göstergeleri başarıyla hesaplandı")
             return df
     
         except Exception as e:
             logging.error(f"Momentum göstergeleri hesaplama hatası: {e}")
-            # Hata durumunda varsayılan değerler ata
-            for col in ['MFI', 'CMF', 'ADL', 'OBV', 'TSI', 'MOM', 'ROC']:
-                if col not in df.columns:
-                    df[col] = 0.0
-            if 'OBV_EMA' not in df.columns:
-                df['OBV_EMA'] = 0.0
+            default_columns = ['MFI', 'CMF', 'ADL', 'OBV', 'OBV_EMA', 'TSI', 'MOM', 'ROC']
+            for col in default_columns:
+                df[col] = 0.0
             return df
     def calculate_hammer(self, df: pd.DataFrame) -> pd.Series:
         """Çekiç formasyonunu hesapla"""
