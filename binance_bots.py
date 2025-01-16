@@ -1350,9 +1350,9 @@ class BinanceFuturesBot:
                 signal_strength = max(buy_strength, sell_strength) * (1 + trend_strength * 0.3)
 
             # Minimum eşik değerleri
-            min_strength = 0.3       # Düşürüldü
-            min_confidence = 0.25    # Düşürüldü
-            min_ml_prob = 0.52      # ML minimum olasılık
+            min_strength = 1.01       # Düşürüldü
+            min_confidence = 1    # Düşürüldü
+            min_ml_prob = 0.50      # ML minimum olasılık
 
             # Formasyon desteği kontrolü
             pattern_signals = technical_signal.get('pattern_signals', {})
@@ -1638,11 +1638,11 @@ class BinanceFuturesBot:
                         return False
     
             # Hesap bakiyesini al
-            balance = float(self.get_account_balance()) * 0.7  # Bütçenin %70'i
-            logging.info(f"Mevcut bakiye (bütçenin %70'i): {balance} USDT")
+            balance = float(self.get_account_balance()) * 0.9  # Bütçenin %70'i
+            logging.info(f"Mevcut bakiye (bütçenin %90'i): {balance} USDT")
     
             # Check if balance is below 5 USD
-            if balance < 5:
+            if balance < 0:
                 logging.warning(f"Yetersiz bakiye: {balance} USDT. İşlem yapılmayacak.")
                 await self.send_telegram(f"⚠️ Yetersiz bakiye: {balance} USDT. İşlem yapılmayacak.")
                 return False
@@ -1651,7 +1651,7 @@ class BinanceFuturesBot:
             try:
                 self.client.change_leverage(
                     symbol=symbol,
-                    leverage=12
+                    leverage=15
                 )
                 logging.info(f"Kaldıraç ayarlandı: {symbol} 12x")
             except Exception as e:
